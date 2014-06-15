@@ -130,7 +130,7 @@ handle_info(ReqUDP = {udp, Socket, FromIP, FromPortNo, Packet}, State = #state{n
                    {discard, _Reason} ->
                        State#state{counter = eradius_counter:inc_counter(invalidRequests, State#state.counter)}
                end,
-    inet:setopts(Socket, [{active, once}]),
+    eradius_inet:setopts(Socket, [{active, once}]),
     {noreply, NewState};
 handle_info({replied, ReqKey, HandlerPid}, State = #state{transacts = Transacts}) ->
     ets:insert(Transacts, {ReqKey, {replied, HandlerPid}}),
