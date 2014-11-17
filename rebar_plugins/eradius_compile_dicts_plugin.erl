@@ -1,23 +1,87 @@
--include("eradius_dict.hrl").
+%%%-------------------------------------------------------------------
+%%% @author sdhillon
+%%% @copyright (C) 2014, <COMPANY>
+%%% @doc
+%%%
+%%% @end
+%%% Created : 16. Nov 2014 6:25 PM
+%%%-------------------------------------------------------------------
+-module(eradius_compile_dicts_plugin).
+-include("../include/eradius_dict.hrl").
+-compile(export_all).
 
 -task({"build:dicts", "Compile eradius dictionaries"}).
 -task({"clean:dicts", "Delete compiled dictionaries"}).
 -hook({"build:dicts", run_before, "build:erlang"}).
 
-check("build:dicts") ->
-    InDir  = tetrapak:path("priv/dictionaries"),
-    OutDir = tetrapak:path("include"),
-    Files  = [{filename:join(InDir, F), filename:join(OutDir, re:replace(F, "\\.", "_", [{return, list}]) ++ ".hrl")}
-                 || F <- filelib:wildcard("*", InDir)],
-    tpk_util:check_files_mtime(Files).
+pre_compile(Config, Appfile) ->
+    case rebar_utils:find_files("priv/dictionaries", "^dictionary.*") of
+        [] ->
+            ok;
+        Dictionaries ->
+            Basedir =  rebar_config:get_xconf(Config, base_dir),
+            IncludeDir = filename:join([Basedir, "include"]),
+            ok = filelib:ensure_dir(IncludeDir),
+            dictionary_compile(Config, Appfile, Dictionaries)
+    end.
 
-run("build:dicts", DictFiles) ->
-    lists:foreach(fun ({F, _}) -> mk_dict(F) end, DictFiles);
+clean(Config, Appfile) ->
+    case rebar_utils:find_files("priv/dictionaries", "^dictionary.*") of
+        [] ->
+            ok;
+        Dictionaries ->
+            dictionary_clean(Config, Appfile, Dictionaries)
+    end.
 
-run("clean:dicts", _) ->
-    tpk_file:delete("\\.map$", tetrapak:path("priv")),
-    tpk_file:delete("dictionary.*\\.hrl", tetrapak:path("include")).
+out_files(Config, DictionaryFile) ->
+    Basedir =  rebar_config:get_xconf(Config, base_dir),
+    DictionaryFileBase = filename:basename(DictionaryFile),
+    OutfileBase = re:replace(DictionaryFileBase, "\\.", "_", [{return, list}]),
+    Headerfile = string:join([OutfileBase, "hrl"], "."),
+    HeaderfileFQ = filename:join([Basedir, "include", Headerfile]),
+    Mapfile = string:join([OutfileBase, "map"], "."),
+    MapfileFQ = filename:join([Basedir, "priv", Mapfile]),
+    {HeaderfileFQ, MapfileFQ}.
 
+
+dictionary_clean(Config, _Appfile, Dictionaries) ->
+    Targets = [{Dictionary, out_files(Config, Dictionary)} || Dictionary <- Dictionaries],
+    clean_each(Targets, Config).
+
+dictionary_compile(Config, _Appfile, Dictionaries) ->
+    Targets = [{Dictionary, out_files(Config, Dictionary)} || Dictionary <- Dictionaries],
+    compile_each(Targets, Config).
+
+needs_compile(Src, Target) ->
+    filelib:last_modified(Src) > filelib:last_modified(Target).
+
+compile_each([], _Config) ->
+    ok;
+compile_each([{Dictionary, {Headerfile, Mapfile}}|Rest], Config) ->
+    case needs_compile(Dictionary, Headerfile)
+        or needs_compile(Dictionary, Mapfile) of
+        false ->
+            compile_each(Rest, Config);
+        true ->
+            file:delete(Headerfile),
+            file:delete(Mapfile),
+            compile_each(Rest, Config)
+    end.
+
+clean_each([], _Config) ->
+    ok;
+clean_each([{Dictionary, {Headerfile, Mapfile}}|Rest], Config) ->
+    case needs_compile(Dictionary, Headerfile)
+        or needs_compile(Dictionary, Mapfile) of
+        false ->
+            compile_each(Rest, Config);
+        true ->
+            Res = parse_dict(Dictionary),
+            {ok, Hrl} = file:open(Headerfile, [write]),
+            {ok, Map} = file:open(Mapfile, [write]),
+            emit(Res, Hrl, Map),
+            clean_each(Rest, Config)
+    end.
 
 %%% --------------------------------------------------------------------
 %%% Dictionary making
@@ -42,13 +106,13 @@ mk_outfiles(Res, Dir, File) ->
 
 emit([A|T], Hrl, Map) when is_record(A, attribute) ->
     io:format(Hrl, "-define( ~s , ~w ).~n",
-	      [d2u(A#attribute.name), A#attribute.id]),
+        [d2u(A#attribute.name), A#attribute.id]),
     io:format(Map, "~w.~n", [A]),
     emit(T, Hrl, Map);
 
 emit([V|T], Hrl, Map) when is_record(V, vendor) ->
     io:format(Hrl, "-define( ~s , ~w ).~n",
-	      [d2u(V#vendor.name), V#vendor.type]),
+        [d2u(V#vendor.name), V#vendor.type]),
     io:format(Map, "~w.~n", [V]),
     emit(T, Hrl, Map);
 emit([V|T], Hrl, Map) when is_record(V, value) ->
@@ -77,18 +141,18 @@ close_files(Hrl, Map) ->
 parse_dict(File) when is_list(File) ->
     {ok,B} = file:read_file(File),
     F = fun(Line,{undefined = Vendor, AccList}) ->
-                case pd(string:tokens(Line,"\s\t\r")) of
-                    {ok,E} -> {Vendor, [E|AccList]};
-                    {begin_vendor, VendId} -> {{vendor, VendId}, AccList};
-                    _      -> {Vendor, AccList}
-                end;
-           (Line, {{vendor, VendId} = Vendor, AccList}) ->
-                case pd(string:tokens(Line, "\s\t\r"), VendId) of
-                    {end_vendor} -> {undefined, AccList};
-                    {ok,E} -> {Vendor, [E|AccList]};
-                    _ -> {Vendor, AccList}
-                end
-	end,
+        case pd(string:tokens(Line,"\s\t\r")) of
+            {ok,E} -> {Vendor, [E|AccList]};
+            {begin_vendor, VendId} -> {{vendor, VendId}, AccList};
+            _      -> {Vendor, AccList}
+        end;
+        (Line, {{vendor, VendId} = Vendor, AccList}) ->
+            case pd(string:tokens(Line, "\s\t\r"), VendId) of
+                {end_vendor} -> {undefined, AccList};
+                {ok,E} -> {Vendor, [E|AccList]};
+                _ -> {Vendor, AccList}
+            end
+    end,
     {_, L} = lists:foldl(F,{undefined, []},string:tokens(b2l(B),"\n")),
     L.
 
@@ -99,15 +163,15 @@ paa(Attr, ["has_tag"]) ->
 
 paa(Attr, ["encrypt", Enc]) ->
     case l2i(Enc) of
-	1 -> Attr#attribute{ enc = scramble };
-	2 -> Attr#attribute{ enc = salt_crypt };
-	_ -> Attr
+        1 -> Attr#attribute{ enc = scramble };
+        2 -> Attr#attribute{ enc = salt_crypt };
+        _ -> Attr
     end;
 
 paa(Attr, [Vendor]) ->
     case get({vendor, Vendor}) of
-	undefined -> Attr;
-	VendId -> Attr#attribute{ id = {VendId, Attr#attribute.id} }
+        undefined -> Attr;
+        VendId -> Attr#attribute{ id = {VendId, Attr#attribute.id} }
     end.
 
 parse_attribute_attrs(Attr, []) ->
@@ -123,8 +187,8 @@ parse_attribute_attrs(Attr, [Attribute|Tail]) ->
 
 pd(["BEGIN-VENDOR", Name]) ->
     case get({vendor, Name}) of
-	undefined -> {begin_vendor, Name};
-	VendId -> {begin_vendor, VendId}
+        undefined -> {begin_vendor, Name};
+        VendId -> {begin_vendor, VendId}
     end;
 
 pd(["VENDOR", Name, Id]) ->
@@ -138,11 +202,11 @@ pd(["ATTRIBUTE", Name, Id, Type | Tail]) ->
 
 pd(["VALUE", Attr, Name, Id]) ->
     case get({attribute, Attr}) of
-	undefined ->
-	    io:format("missing: ~p~n", [Attr]),
-	    false;
-	AttrId ->
-	    {ok,#value{id = {AttrId, id2i(Id)}, name = Name}}
+        undefined ->
+            io:format("missing: ~p~n", [Attr]),
+            false;
+        AttrId ->
+            {ok,#value{id = {AttrId, id2i(Id)}, name = Name}}
     end;
 pd(_X) ->
     %%io:format("Skipping: ~p~n", [X]),
@@ -158,11 +222,11 @@ pd(["ATTRIBUTE", Name, Id, Type | Tail], VendId) ->
 
 pd(["VALUE", Attr, Name, Id], _VendId) ->
     case get({attribute, Attr}) of
-	undefined ->
-	    io:format("missing: ~p~n", [Attr]),
-	    false;
-	AttrId ->
-	    {ok,#value{id = {AttrId, id2i(Id)}, name = Name}}
+        undefined ->
+            io:format("missing: ~p~n", [Attr]),
+            false;
+        AttrId ->
+            {ok,#value{id = {AttrId, id2i(Id)}, name = Name}}
     end;
 pd(_X, _VendId) ->
     %%io:format("Skipping: ~p~n", [_X]),
@@ -175,9 +239,9 @@ dir(Mod) ->
 
 id2i(Id) ->
     case catch l2i(Id) of
-	I when is_integer(I) -> I;
-	{'EXIT', _} ->
-	    hex2i(Id)
+        I when is_integer(I) -> I;
+        {'EXIT', _} ->
+            hex2i(Id)
     end.
 
 hex2i("0x" ++ L) -> erlang:list_to_integer(L, 16).
@@ -201,6 +265,6 @@ o2u(L) when is_list(L) ->
 
 repl(L,X,Y) when is_list(L) ->
     F = fun(Z) when Z == X -> Y;
-	   (C) -> C
-	end,
+        (C) -> C
+    end,
     lists:map(F,L).
