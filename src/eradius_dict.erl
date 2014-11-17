@@ -75,6 +75,7 @@ mapfile(A) when is_list(A) -> A ++ ".map".
 do_load_tables(Dir, Tables) ->
     try
         Defs = lists:flatmap(fun (Tab) ->
+                                     io:format("Trying to load, Tab: ~p, from dir: ~p~n", [Tab, Dir]),
                                      TabFile = filename:join(Dir, mapfile(Tab)),
                                      case file:consult(TabFile) of
                                          {ok, Res}       -> Res;

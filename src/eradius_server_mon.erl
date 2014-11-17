@@ -151,7 +151,6 @@ configure(#state{running = Running}) ->
                                                  Acc
                                          end
                                  end, Started, ToStart),
-            eradius_node_mon:set_nodes(config_nodes(ServList)),
             {ok, #state{running = NRunning}}
     end.
 
@@ -159,11 +158,6 @@ configure(#state{running = Running}) ->
 server_naslist({{IP, Port}, HandlerList}) ->
     [#nas{key = {{IP, Port}, NasIP},
           handler = {HandlerMod, HandlerArgs},
-          prop = #nas_prop{handler_nodes = HandlerNodes, nas_id = NasId, nas_ip = NasIP, secret = Secret, trace = false}}
-      || {NasId, NasIP, Secret, HandlerNodes, HandlerMod, HandlerArgs} <- HandlerList].
+          prop = #nas_prop{nas_id = NasId, nas_ip = NasIP, secret = Secret, trace = false}}
+      || {NasId, NasIP, Secret, HandlerMod, HandlerArgs} <- HandlerList].
 
-%-spec config_nodes(valid_config()) -> list(node()).
-config_nodes(Config) ->
-    ordsets:from_list(lists:concat([N || {_Server, HandlerList} <- Config,
-                                         {_, _, N, _, _} <- HandlerList,
-                                         N /= local, N /= node()])).

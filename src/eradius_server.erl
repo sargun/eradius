@@ -174,9 +174,8 @@ lookup_nas(_State, _NasIP, _Packet) ->
 %% -- Request Handler
 %% @private
 -spec do_radius(pid(), term(), eradius_server_mon:handler(), #nas_prop{}, udp_packet()) -> any().
-do_radius(ServerPid, ReqKey, Handler = {HandlerMod, _}, NasProp, {udp, Socket, FromIP, FromPort, EncRequest}) ->
-    Nodes = eradius_node_mon:get_module_nodes(HandlerMod),
-    case run_handler(Nodes, NasProp, Handler, EncRequest) of
+do_radius(ServerPid, ReqKey, Handler, NasProp, {udp, Socket, FromIP, FromPort, EncRequest}) ->
+    case handle_request(Handler, NasProp, EncRequest) of
         {reply, EncReply} ->
             dbg(NasProp, "sending response for ~p~n", [ReqKey]),
             gen_udp:send(Socket, FromIP, FromPort, EncReply),
@@ -215,46 +214,6 @@ wait_resend(ServerPid, ReqKey, FromIP, FromPort, EncReply, Retries) ->
             ServerPid ! {discarded, ReqKey}
     end.
 
-run_handler([], _NasProp, _Handler, _EncRequest) ->
-    {discard, no_nodes};
-run_handler(NodesAvailable, NasProp = #nas_prop{handler_nodes = local}, Handler, EncRequest) ->
-    case lists:member(node(), NodesAvailable) of
-        true ->
-            handle_request(Handler, NasProp, EncRequest);
-        false ->
-            {discard, no_nodes_local}
-    end;
-run_handler(NodesAvailable, NasProp, Handler, EncRequest) ->
-    case ordsets:intersection(lists:usort(NodesAvailable), lists:usort(NasProp#nas_prop.handler_nodes)) of
-        [LocalNode] when LocalNode == node() ->
-            handle_request(Handler, NasProp, EncRequest);
-        [RemoteNode] ->
-            run_remote_handler(RemoteNode, Handler, NasProp, EncRequest);
-        Nodes ->
-            %% humble testing at the erlang shell indicated that phash2 distributes N
-            %% very well even for small lenghts.
-            N = erlang:phash2(make_ref(), length(Nodes)) + 1,
-            case lists:nth(N, Nodes) of
-                LocalNode when LocalNode == node() ->
-                    handle_request(Handler, NasProp, EncRequest);
-                RemoteNode ->
-                    run_remote_handler(RemoteNode, Handler, NasProp, EncRequest)
-            end
-    end.
-
-run_remote_handler(Node, {HandlerMod, HandlerArgs}, NasProp, EncRequest) ->
-    NasPropTuple = nas_prop_record_to_tuple(NasProp),
-    RemoteArgs = [self(), HandlerMod, HandlerArgs, NasPropTuple, EncRequest],
-    HandlerPid = spawn_link(Node, ?MODULE, handle_remote_request, RemoteArgs),
-    receive
-        {HandlerPid, ReturnValue} ->
-            ReturnValue
-    after
-        ?HANDLER_REPLY_TIMEOUT ->
-            %% this happens if the remote handler doesn't terminate
-            unlink(HandlerPid),
-            {discard, {remote_handler_reply_timeout, Node}}
-    end.
 
 %% @private
 -spec handle_request(eradius_server_mon:handler(), #nas_prop{}, binary()) -> any().
@@ -282,12 +241,12 @@ handle_remote_request(ReplyPid, HandlerMod, HandlerArg, NasPropTuple, EncRequest
 nas_prop_record_to_tuple(R = #nas_prop{}) ->
     {nas_prop_v1, R#nas_prop.server_ip, R#nas_prop.server_port,
                   R#nas_prop.nas_ip, R#nas_prop.nas_port,
-                  R#nas_prop.secret, R#nas_prop.trace, R#nas_prop.handler_nodes}.
+                  R#nas_prop.secret, R#nas_prop.trace}.
 
-nas_prop_tuple_to_record({nas_prop_v1, ServerIP, ServerPort, NasIP, NasPort, Secret, Trace, Nodes}) ->
+nas_prop_tuple_to_record({nas_prop_v1, ServerIP, ServerPort, NasIP, NasPort, Secret, Trace}) ->
     #nas_prop{server_ip = ServerIP, server_port = ServerPort,
               nas_ip = NasIP, nas_port = NasPort,
-              secret = Secret, trace = Trace, handler_nodes = Nodes}.
+              secret = Secret, trace = Trace}.
 
 -spec apply_handler_mod(module(), term(), #radius_request{}, #nas_prop{}) -> {discard, term()} | {exit, term()} | {reply, binary()}.
 apply_handler_mod(HandlerMod, HandlerArg, Request, NasProp) ->
