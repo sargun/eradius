@@ -51,7 +51,7 @@
 -behaviour(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--include("eradius_lib.hrl").
+-include_lib("eradius/include/eradius_lib.hrl").
 
 -define(RESEND_TIMEOUT, 5000).          % how long the binary response is kept after sending it on the socket
 -define(RESEND_RETRIES, 3).             % how often a reply may be resent
@@ -63,11 +63,10 @@
 -type udp_packet()  :: {udp, udp_socket(), inet:ip_address(), port_number(), binary()}.
 
 -record(state, {
-    socket         :: udp_socket(),      % Socket Reference of opened UDP port
-    ip = {0,0,0,0} :: inet:ip_address(), % IP to which this socket is bound
-    port = 0       :: port_number(),     % Port number we are listening on
-    transacts      :: ets:tid(),         % ETS table containing current transactions
-    counter        :: #server_counter{}  % statistics counter
+    socket                      :: udp_socket(),      % Socket Reference of opened UDP port
+    ip = {0,0,0,0}              :: inet:ip_address(), % IP to which this socket is bound
+    port = 0                    :: port_number(),     % Port number we are listening on
+    transacts = orddict:new()   :: orddict:orddict()          % ETS table containing current transactions
 }).
 
 -spec behaviour_info('callbacks') -> [{module(), non_neg_integer()}].
@@ -87,56 +86,80 @@ stats(Server, Function) ->
 %% @private
 init({IP, Port}) ->
     process_flag(trap_exit, true),
-    case gen_udp:open(Port, [{active, once}, {ip, IP}, binary]) of
+    case gen_udp:open(Port, [{active, true}, {ip, IP}, binary]) of
         {ok, Socket} ->
             {ok, #state{socket = Socket,
                         ip = IP, port = Port,
-                        transacts = ets:new(transacts, []),
-                        counter = eradius_counter:init_counter({IP, Port})}};
+                        transacts = orddict:new()}};
         {error, Reason} ->
             {stop, Reason}
     end.
 
+inc_nas_counter(Counter, _NasProp = #nas_prop{server_ip = IP, server_port = Port, nas_ip = NasIP}) ->
+    Key = {{{IP, Port}, NasIP}, Counter},
+    case folsom_metrics:new_meter(Key) of
+        ok ->
+            folsom_metrics:tag_metric(Key, eradius),
+            folsom_metrics:tag_metric(Key, {IP, Port});
+        {error, Key, metric_already_exists} ->
+            ok
+    end,
+    folsom_metrics:notify({Key, 1}).
+
+inc_server_counter(Counter, _State = #state{ip = IP, port = Port}) ->
+    Key = {{IP, Port}, Counter},
+    case folsom_metrics:new_meter(Key) of
+        ok ->
+            folsom_metrics:tag_metric(Key, eradius),
+            folsom_metrics:tag_metric(Key, {IP, Port});
+        {error, Key, metric_already_exists} ->
+            ok
+    end,
+    folsom_metrics:notify({Key, 1}).
+
 %% @private
 handle_info(ReqUDP = {udp, Socket, FromIP, FromPortNo, Packet}, State = #state{transacts = Transacts}) ->
-    case lookup_nas(State, FromIP, Packet) of
+    NewState = case lookup_nas(State, FromIP, Packet) of
         {ok, ReqID, Handler, NasProp} ->
             ReqKey = {FromIP, FromPortNo, ReqID},
             NNasProp = NasProp#nas_prop{nas_port = FromPortNo},
-            case ets:lookup(Transacts, ReqKey) of
-                [] ->
+            case orddict:find(ReqKey, Transacts) of
+                error ->
                     HandlerPid = proc_lib:spawn_link(?MODULE, do_radius, [self(), ReqKey, Handler, NNasProp, ReqUDP]),
-                    ets:insert(Transacts, {ReqKey, {handling, HandlerPid}}),
-                    eradius_counter:inc_counter(requests, NasProp);
-                [{_ReqKey, {handling, _HandlerPid}}] ->
+                    inc_nas_counter(requests, NasProp),
+                    State#state{transacts = orddict:store(ReqKey, {handling, HandlerPid}, Transacts)};
+                {handling, _HandlerPid} ->
                     %% handler process is still working on the request
                     dbg(NasProp, "duplicate request (being handled) ~p~n", [ReqKey]),
-                    eradius_counter:inc_counter(dupRequests, NasProp);
-                [{_ReqKey, {replied, HandlerPid}}] ->
+                    inc_nas_counter(dupRequests, NasProp),
+                    State;
+                {replied, HandlerPid} ->
                     %% handler process waiting for resend message
                     HandlerPid ! {self(), resend, Socket},
                     dbg(NasProp, "duplicate request (resend) ~p~n", [ReqKey]),
-                    eradius_counter:inc_counter(dupRequests, NasProp)
-            end,
-            NewState = State;
-        {discard, Reason} when Reason == no_nodes_local, Reason == no_nodes ->
-            NewState = State#state{counter = eradius_counter:inc_counter(discardNoHandler, State#state.counter)};
+                    inc_nas_counter(dupRequests, NasProp),
+                    State
+            end;
         {discard, _Reason} ->
-            NewState = State#state{counter = eradius_counter:inc_counter(invalidRequests, State#state.counter)}
+            inc_server_counter(invalidRequests, State),
+            State
     end,
-    inet:setopts(Socket, [{active, once}]),
     {noreply, NewState};
 handle_info({replied, ReqKey, HandlerPid}, State = #state{transacts = Transacts}) ->
-    ets:insert(Transacts, {ReqKey, {replied, HandlerPid}}),
-    {noreply, State};
+    NewState = State#state{transacts = orddict:store(ReqKey, {replied, HandlerPid}, Transacts)},
+    {noreply, NewState};
 handle_info({discarded, ReqKey}, State = #state{transacts = Transacts}) ->
-    ets:delete(Transacts, ReqKey),
-    {noreply, State};
-handle_info({'EXIT', _HandlerPid, normal}, State) ->
-    {noreply, State};
+    NewState = State#state{transacts = orddict:erase(ReqKey, Transacts)},
+    {noreply, NewState};
 handle_info({'EXIT', HandlerPid, _OtherReason}, State = #state{transacts = Transacts}) ->
-    ets:match_delete(Transacts, {'_', {'_', HandlerPid}}),
-    {noreply, State};
+    Matching = orddict:filter(fun(_ReqKey, {_Status, Pid}) -> Pid == HandlerPid end, Transacts),
+    NewState = case orddict:fetch_keys(Matching) of
+                   [] ->
+                       State;
+                   [ReqKey] ->
+                       State#state{transacts = orddict:erase(ReqKey, Transacts)}
+               end,
+    {noreply, NewState};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -146,12 +169,15 @@ terminate(_Reason, State) ->
     ok.
 
 %% @private
-handle_call({stats, pull}, _From, State = #state{counter = Counter}) ->
-    {reply, Counter, State#state{counter = eradius_counter:reset_counter(Counter)}};
-handle_call({stats, read}, _From, State = #state{counter = Counter}) ->
-    {reply, Counter, State};
-handle_call({stats, reset}, _From, State = #state{counter = Counter}) ->
-    {reply, ok, State#state{counter = eradius_counter:reset_counter(Counter)}}.
+handle_call({stats, pull}, _From, State) ->
+    io:format("Pulling counters~n", []),
+    {reply, 0, State};
+handle_call({stats, read}, _From, State) ->
+    io:format("Reading counters~n", []),
+    {reply, 0, State};
+handle_call({stats, reset}, _From, State) ->
+    io:format("Resetting counters~n", []),
+    {reply, ok, State}.
 
 %% -- unused callbacks
 %% @private
@@ -180,7 +206,7 @@ do_radius(ServerPid, ReqKey, Handler, NasProp, {udp, Socket, FromIP, FromPort, E
             dbg(NasProp, "sending response for ~p~n", [ReqKey]),
             gen_udp:send(Socket, FromIP, FromPort, EncReply),
             ServerPid ! {replied, ReqKey, self()},
-            eradius_counter:inc_counter(replies, NasProp),
+            inc_nas_counter(replies, NasProp),
             {ok, ResendTimeout} = application:get_env(eradius, resend_timeout),
             wait_resend_init(ServerPid, ReqKey, FromIP, FromPort, EncReply, ResendTimeout, ?RESEND_RETRIES);
         {discard, Reason} ->
@@ -189,15 +215,15 @@ do_radius(ServerPid, ReqKey, Handler, NasProp, {udp, Socket, FromIP, FromPort, E
             ServerPid ! {discarded, ReqKey};
         {exit, Reason} ->
             dbg(NasProp, "discarding request (handler EXIT) ~p: ~p~n", [ReqKey, Reason]),
-            eradius_counter:inc_counter(handlerFailure, NasProp),
+            inc_nas_counter(handlerFailure, NasProp),
             ServerPid ! {discarded, ReqKey}
     end.
 
 %% @TODO: extend for other failures
 discard_inc_counter(bad_pdu, NasProp) ->
-    eradius_counter:inc_counter(malformedRequests, NasProp);
+    inc_nas_counter(malformedRequests, NasProp);
 discard_inc_counter(_Reason, NasProp) ->
-    eradius_counter:inc_counter(packetsDropped, NasProp).
+    inc_nas_counter(packetsDropped, NasProp).
 
 wait_resend_init(ServerPid, ReqKey, FromIP, FromPort, EncReply, ResendTimeout, Retries) ->
     erlang:send_after(ResendTimeout, self(), timeout),
@@ -286,32 +312,33 @@ printable_date() ->
     {{Y, Mo, D}, {H, M, S}} = calendar:now_to_local_time(Now),
     io_lib:format("~4..0b-~2..0b-~2..0b ~2..0b:~2..0b:~2..0b:~4..0b", [Y,Mo,D,H,M,S,MicroSecs div 1000]).
 
+
 request_inc_counter(request, NasProp) ->
-    eradius_counter:inc_counter(accessRequests, NasProp);
+    inc_nas_counter(accessRequests, NasProp);
 request_inc_counter(accreq, NasProp) ->
-    eradius_counter:inc_counter(accountRequests, NasProp);
+    inc_nas_counter(accountRequests, NasProp);
 request_inc_counter(coareq, NasProp) ->
-    eradius_counter:inc_counter(coaRequests, NasProp);
+    inc_nas_counter(coaRequests, NasProp);
 request_inc_counter(discreq, NasProp) ->
-    eradius_counter:inc_counter(disconnectRequests, NasProp);
+    inc_nas_counter(disconnectRequests, NasProp);
 request_inc_counter(_Cmd, _NasProp) ->
     ok.
 
 reply_inc_counter(accept, NasProp) ->
-    eradius_counter:inc_counter(accessAccepts, NasProp);
+    inc_nas_counter(accessAccepts, NasProp);
 reply_inc_counter(reject, NasProp) ->
-    eradius_counter:inc_counter(accessRejects, NasProp);
+    inc_nas_counter(accessRejects, NasProp);
 reply_inc_counter(challenge, NasProp) ->
-    eradius_counter:inc_counter(accessChallenges, NasProp);
+    inc_nas_counter(accessChallenges, NasProp);
 reply_inc_counter(accresp, NasProp) ->
-    eradius_counter:inc_counter(accountResponses, NasProp);
+    inc_nas_counter(accountResponses, NasProp);
 reply_inc_counter(coaack, NasProp) ->
-    eradius_counter:inc_counter(coaAcks, NasProp);
+    inc_nas_counter(coaAcks, NasProp);
 reply_inc_counter(coanak, NasProp) ->
-    eradius_counter:inc_counter(coaNaks, NasProp);
+    inc_nas_counter(coaNaks, NasProp);
 reply_inc_counter(discack, NasProp) ->
-    eradius_counter:inc_counter(discAcks, NasProp);
+    inc_nas_counter(discAcks, NasProp);
 reply_inc_counter(discnak, NasProp) ->
-    eradius_counter:inc_counter(discNaks, NasProp);
+    inc_nas_counter(discNaks, NasProp);
 reply_inc_counter(_Cmd, _NasProp) ->
     ok.
