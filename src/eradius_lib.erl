@@ -486,8 +486,12 @@ enc_vendor_octet_test() ->
     E = << ?RVendor_Specific, (4+8):8, 311:32, 7:8, (4+2):8, 7:32 >>,
     E = encode_attribute(?PDU, #attribute{id = {311,7}, type = octets, enc = no}, 7).
 
+-spec decode_attribute(binary(), #radius_request{}, #attribute{}) -> #decoder_state{}.
+decode_attribute(BinData, Request, Attr) ->
+    decode_attribute(BinData, Request, Attr, 0, #decoder_state{}).
+
 dec_simple_integer_test() ->
-    [{_, 1}] = decode_attribute(<<0,0,0,1>>, ?PDU, #attribute{id = 40, type = integer, enc = no}).
+    [{_, 1}] = decode_attribute(<<0,0,0,1>>, ?PDU, #attribute{id = 40, type = integer, enc = no}, 0, #decoder_state{}).
 
 dec_simple_string_test() ->
     [{_, "29113"}] = decode_attribute(<<"29113">>, ?PDU, #attribute{id = 44, type = string, enc = no}).
