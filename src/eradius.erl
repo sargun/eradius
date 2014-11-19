@@ -1,8 +1,6 @@
 %% @doc Main module of the eradius application.
 -module(eradius).
 -export([load_tables/1, load_tables/2,
-	 modules_ready/1, modules_ready/2,
-	 trace_on/3, trace_off/3,
 	 statistics/0, start/0]).
 
 -behaviour(application).
@@ -25,39 +23,12 @@ load_tables(Tables) ->
 load_tables(Dir, Tables) ->
     eradius_dict:load_tables(Dir, Tables).
 
-%% @equiv modules_ready(self(), Modules)
-modules_ready(Modules) ->
-    eradius_node_mon_lol:modules_ready(self(), Modules).
 
-%% @doc Announce request handler module availability.
-%%    Applications need to call this function (usually from their application master)
-%%    in order to make their modules (which should implement the {@link eradius_server} behaviour)
-%%    available for processing. The modules will be revoked when the given Pid goes down.
-modules_ready(Pid, Modules) ->
-    eradius_node_mon_lol:modules_ready(Pid, Modules).
-
-%% @doc Start tracing requests from the given NAS coming in on the given server.
-%%   Do not do do this on a production system, it generates lots of output.
-trace_on(ServerIP, ServerPort, NasIP) ->
-    eradius_server_mon:set_trace(ensure_ip(ServerIP), ServerPort, ensure_ip(NasIP), true).
-
-%% @doc Stop tracing requests from the given NAS.
-trace_off(ServerIP, ServerPort, NasIP) ->
-    eradius_server_mon:set_trace(ensure_ip(ServerIP), ServerPort, ensure_ip(NasIP), false).
 
 %% @doc get server statistics
 statistics() ->
     folsom_metrics:get_metrics_value(eradius).
 
-ensure_ip(IP = {_,_,_,_}) -> IP;
-ensure_ip(IP = {_,_,_,_,_,_,_,_}) -> IP;
-ensure_ip(IPString) when is_list(IPString) ->
-    case inet_parse:address(IPString) of
-        {ok, Address}   -> Address;
-        {error, einval} -> error(badarg, [IPString])
-    end;
-ensure_ip(IP) ->
-    error(badarg, [IP]).
 
 %% @private
 %% @doc Log an error using error_logger

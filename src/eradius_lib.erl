@@ -3,6 +3,7 @@
 -export([random_authenticator/0, zero_authenticator/0, pad_to/2, set_attr/3, get_attributes/1, set_attributes/2]).
 -export_type([command/0, secret/0, authenticator/0, attribute_list/0]).
 
+-compile(export_all).
 % -compile(bin_opt_info).
 
 -ifdef(TEST).
@@ -491,22 +492,32 @@ decode_attribute(BinData, Request, Attr) ->
     decode_attribute(BinData, Request, Attr, 0, #decoder_state{}).
 
 dec_simple_integer_test() ->
-    [{_, 1}] = decode_attribute(<<0,0,0,1>>, ?PDU, #attribute{id = 40, type = integer, enc = no}, 0, #decoder_state{}).
+    Out = decode_attribute(<<0,0,0,1>>, ?PDU, #attribute{id = 40, type = integer, enc = no}, 0, #decoder_state{}),
+    1 = get_attr_loop(40, Out#decoder_state.attrs).
 
 dec_simple_string_test() ->
-    [{_, "29113"}] = decode_attribute(<<"29113">>, ?PDU, #attribute{id = 44, type = string, enc = no}).
+    Out = decode_attribute(<<"29113">>, ?PDU, #attribute{id = 44, type = string, enc = no}),
+    <<"29113">> = get_attr_loop(44, Out#decoder_state.attrs).
 
 dec_simple_ipv4_test() ->
-    [{_, {10,33,0,1}}] = decode_attribute(<<10,33,0,1>>, ?PDU, #attribute{id = 4, type = ipaddr, enc = no}).
+    Out = decode_attribute(<<10,33,0,1>>, ?PDU, #attribute{id = 4, type = ipaddr, enc = no}),
+    {10,33,0,1} = get_attr_loop(4, Out#decoder_state.attrs).
 
 dec_vendor_integer_test() ->
-    [{_,0}] = decode_attribute(<<0,0,40,175,3,6,0,0,0,0>>, ?PDU, #attribute{id = ?RVendor_Specific, type = octets, enc = no}).
+    %% No idea if that's actually supposed to the return value
+    eradius_dict:start_link(),
+    Out = decode_attribute(<<0,0,40,175,3,6,0,0,0,0>>, ?PDU, #attribute{id = ?RVendor_Specific, type = octets, enc = no}),
+    <<0,0,0,0>> = get_attr_loop({10415,3}, Out#decoder_state.attrs).
 
 dec_vendor_string_test() ->
-    [{_,"23415"}] = decode_attribute(<<0,0,40,175,8,7,"23415">>, ?PDU, #attribute{id = ?RVendor_Specific, type = octets, enc = no}).
+    eradius_dict:start_link(),
+    Out = decode_attribute(<<0,0,40,175,8,7,"23415">>, ?PDU, #attribute{id = ?RVendor_Specific, type = octets, enc = no}),
+    <<"23415">> = get_attr_loop({10415,8}, Out#decoder_state.attrs).
 
 dec_vendor_ipv4_test() ->
-    [{_,{212,183,144,246}}] = decode_attribute(<<0,0,40,175,6,6,212,183,144,246>>, ?PDU, #attribute{id = ?RVendor_Specific, type = octets, enc = no}).
+    eradius_dict:start_link(),
+    Out = decode_attribute(<<0,0,40,175,6,6,212,183,144,246>>, ?PDU, #attribute{id = ?RVendor_Specific, type = octets, enc = no}),
+    <<212,183,144,246>> = get_attr_loop({10415,6}, Out#decoder_state.attrs).
 
 %% TODO: add more tests
 
