@@ -130,13 +130,13 @@ handle_info(ReqUDP = {udp, Socket, FromIP, FromPortNo, Packet}, State = #state{t
                     State#state{transacts = orddict:store(ReqKey, {handling, HandlerPid}, Transacts)};
                 {handling, _HandlerPid} ->
                     %% handler process is still working on the request
-                    dbg(NasProp, "duplicate request (being handled) ~p~n", [ReqKey]),
+                    lager:debug("duplicate request (being handled) ~p~n", [ReqKey]),
                     inc_nas_counter(dupRequests, NasProp),
                     State;
                 {replied, HandlerPid} ->
                     %% handler process waiting for resend message
                     HandlerPid ! {self(), resend, Socket},
-                    dbg(NasProp, "duplicate request (resend) ~p~n", [ReqKey]),
+                    lager:debug("duplicate request (resend) ~p~n", [ReqKey]),
                     inc_nas_counter(dupRequests, NasProp),
                     State
             end;
@@ -203,18 +203,18 @@ lookup_nas(_State, _NasIP, _Packet) ->
 do_radius(ServerPid, ReqKey, Handler, NasProp, {udp, Socket, FromIP, FromPort, EncRequest}) ->
     case handle_request(Handler, NasProp, EncRequest) of
         {reply, EncReply} ->
-            dbg(NasProp, "sending response for ~p~n", [ReqKey]),
+            lager:debug("sending response for ~p~n", [ReqKey]),
             gen_udp:send(Socket, FromIP, FromPort, EncReply),
             ServerPid ! {replied, ReqKey, self()},
             inc_nas_counter(replies, NasProp),
             {ok, ResendTimeout} = application:get_env(eradius, resend_timeout),
             wait_resend_init(ServerPid, ReqKey, FromIP, FromPort, EncReply, ResendTimeout, ?RESEND_RETRIES);
         {discard, Reason} ->
-            dbg(NasProp, "discarding request ~p: ~1000.p~n", [ReqKey, Reason]),
+            lager:debug("discarding request ~p: ~1000.p~n", [ReqKey, Reason]),
             discard_inc_counter(Reason, NasProp),
             ServerPid ! {discarded, ReqKey};
         {exit, Reason} ->
-            dbg(NasProp, "discarding request (handler EXIT) ~p: ~p~n", [ReqKey, Reason]),
+            lager:debug("discarding request (handler EXIT) ~p: ~p~n", [ReqKey, Reason]),
             inc_nas_counter(handlerFailure, NasProp),
             ServerPid ! {discarded, ReqKey}
     end.
@@ -248,11 +248,12 @@ handle_request({HandlerMod, HandlerArg}, NasProp, EncRequest) ->
         Request = #radius_request{} ->
             request_inc_counter(Request#radius_request.cmd, NasProp),
             Sender = {NasProp#nas_prop.nas_ip, NasProp#nas_prop.nas_port, Request#radius_request.reqid},
-            eradius_log:write_request(Sender, Request),
+            lager:debug("Sender: ~p; Command: ~p; Packet: ~p", [Sender, Request#radius_request.cmd, Request]),
             apply_handler_mod(HandlerMod, HandlerArg, Request, NasProp);
         bad_pdu ->
             {discard, bad_pdu}
     end.
+
 
 %% @private
 %% @doc this function is spawned on a remote node to handle a radius request.
@@ -300,17 +301,6 @@ apply_handler_mod(HandlerMod, HandlerArg, Request, NasProp) ->
             {exit, {Class, Reason}}
     end.
 
--spec dbg(#nas_prop{}, string(), list()) -> ok.
-dbg(#nas_prop{trace = true}, Fmt, Vals) ->
-    io:put_chars([printable_date(), " -- ", io_lib:format(Fmt, Vals)]);
-dbg(_, _, _) ->
-    ok.
-
--spec printable_date() -> io_lib:chars().
-printable_date() ->
-    {_ , _, MicroSecs} = Now = now(),
-    {{Y, Mo, D}, {H, M, S}} = calendar:now_to_local_time(Now),
-    io_lib:format("~4..0b-~2..0b-~2..0b ~2..0b:~2..0b:~2..0b:~4..0b", [Y,Mo,D,H,M,S,MicroSecs div 1000]).
 
 
 request_inc_counter(request, NasProp) ->
@@ -342,3 +332,5 @@ reply_inc_counter(discnak, NasProp) ->
     inc_nas_counter(discNaks, NasProp);
 reply_inc_counter(_Cmd, _NasProp) ->
     ok.
+
+
