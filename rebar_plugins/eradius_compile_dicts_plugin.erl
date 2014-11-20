@@ -10,9 +10,6 @@
 -include("../include/eradius_dict.hrl").
 -compile(export_all).
 
--task({"build:dicts", "Compile eradius dictionaries"}).
--task({"clean:dicts", "Delete compiled dictionaries"}).
--hook({"build:dicts", run_before, "build:erlang"}).
 
 pre_compile(Config, Appfile) ->
     case rebar_utils:find_files("priv/dictionaries", "^dictionary.*") of
