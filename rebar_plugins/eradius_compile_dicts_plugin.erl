@@ -60,25 +60,19 @@ compile_each([{Dictionary, {Headerfile, Mapfile}}|Rest], Config) ->
         false ->
             compile_each(Rest, Config);
         true ->
-            file:delete(Headerfile),
-            file:delete(Mapfile),
+            Res = parse_dict(Dictionary),
+            {ok, Hrl} = file:open(Headerfile, [write]),
+            {ok, Map} = file:open(Mapfile, [write]),
+            emit(Res, Hrl, Map),
             compile_each(Rest, Config)
     end.
 
 clean_each([], _Config) ->
     ok;
 clean_each([{Dictionary, {Headerfile, Mapfile}}|Rest], Config) ->
-    case needs_compile(Dictionary, Headerfile)
-        or needs_compile(Dictionary, Mapfile) of
-        false ->
-            compile_each(Rest, Config);
-        true ->
-            Res = parse_dict(Dictionary),
-            {ok, Hrl} = file:open(Headerfile, [write]),
-            {ok, Map} = file:open(Mapfile, [write]),
-            emit(Res, Hrl, Map),
-            clean_each(Rest, Config)
-    end.
+    file:delete(Headerfile),
+    file:delete(Mapfile),
+    clean_each(Rest, Config).
 
 %%% --------------------------------------------------------------------
 %%% Dictionary making
