@@ -72,6 +72,8 @@
           discNaks                 = 0 :: non_neg_integer()
          }).
 
+-define(COUNTERS, [requests, replies, dupRequests, malformedRequests, accessRequests, accessAccepts, accessRejects, accessChallenges, accountRequests, accountResponses, noRecords, badAuthenticators, packetsDropped, unknownTypes, handlerFailure, coaRequests, coaAcks, coaNaks, discRequests, discAcks, discNaks]).
+
 -record(server_counter, {
           key                  :: term(),
           upTime               :: erlang:timestamp(),

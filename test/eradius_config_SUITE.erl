@@ -51,24 +51,21 @@ config_1(_Config) ->
                           server_ip = {127,0,0,1},
                           server_port = 1813,
                           nas_id = <<"name">>,
-                          nas_ip = {10,18,14,3},
-                          handler_nodes = ['node1@host1', 'node2@host2']
+                          nas_ip = {10,18,14,3}
                          }}, eradius_server_mon:lookup_handler({127,0,0,1}, 1813, {10,18,14,3})),
     ?match({ok, {?MODULE,[arg1,arg2]},
                 #nas_prop{
                           server_ip = {127,0,0,1},
                           server_port = 1812,
                           nas_id = <<"name">>,
-                          nas_ip = {10,18,14,3},
-                          handler_nodes = ['node1@host1', 'node2@host2']
+                          nas_ip = {10,18,14,3}
                          }}, eradius_server_mon:lookup_handler({127,0,0,1}, 1812, {10,18,14,3})),
     ?match({ok, {?MODULE,[arg1,arg2]},
                 #nas_prop{
                           server_ip = {127,0,0,1},
                           server_port = 1813,
                           nas_id = <<"NAS1_10.18.14.2">>,
-                          nas_ip = {10,18,14,2},
-                          handler_nodes = ['node1@host1', 'node2@host2']
+                          nas_ip = {10,18,14,2}
                          }}, eradius_server_mon:lookup_handler({127,0,0,1}, 1813, {10,18,14,2})),
     ok.
 
@@ -94,24 +91,21 @@ config_2(_Config) ->
                           server_ip = {127,0,0,1},
                           server_port = 1813,
                           nas_id = <<"NAS1_10.18.14.3">>,
-                          nas_ip = {10,18,14,3},
-                          handler_nodes = ['node1@host1', 'node2@host2']
+                          nas_ip = {10,18,14,3}
                          }}, eradius_server_mon:lookup_handler({127,0,0,1}, 1813, {10,18,14,3})),
     ?match({ok, {handler1,[arg1,arg2]},
                 #nas_prop{
                           server_ip = {127,0,0,1},
                           server_port = 1813,
                           nas_id = <<"NAS1_10.18.14.4">>,
-                          nas_ip = {10,18,14,4},
-                          handler_nodes = ['node1@host1', 'node2@host2']
+                          nas_ip = {10,18,14,4}
                          }}, eradius_server_mon:lookup_handler({127,0,0,1}, 1813, {10,18,14,4})),
     ?match({ok, {handler2,[arg3,arg4]},
                 #nas_prop{
                           server_ip = {127,0,0,1},
                           server_port = 1813,
                           nas_id = <<"NAS2_10.18.14.2">>,
-                          nas_ip = {10,18,14,2},
-                          handler_nodes = ['node3@host3', 'node4@host4']
+                          nas_ip = {10,18,14,2}
                          }}, eradius_server_mon:lookup_handler({127,0,0,1}, 1813, {10,18,14,2})),
     ok.
 
