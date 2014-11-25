@@ -39,7 +39,14 @@ okta_authenticate(Username, Password, URLHost, Token) ->
     lager:debug("Okta responded with authentication for: ~s, with {Status, ResponseHeaders, ResponseBody} = ~p", [Username, {Status, ResponseHeaders, ResponseBody}]),
     case Status of
         "200" ->
-            true;
+            ResponseBodyDecoded = jsx:decode(list_to_binary(ResponseBody)),
+            JSONStatus = orddict:find(<<"status">>, ResponseBodyDecoded),
+            case JSONStatus of
+                {ok, <<"SUCCESS">>} ->
+                    true;
+                _  ->
+                    false
+            end;
         _ ->
             false
     end.
