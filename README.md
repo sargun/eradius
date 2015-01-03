@@ -9,6 +9,18 @@ We should probably rename it to avoid confusion.
 
 ## Building eradius
 
-We use [tetrapak](github.com/fjl/tetrapak) to build eradius.
-Tetrapak is required to build the dictionaries.
+```
+git clone {{REPO_LINK}} ./eradius
+cd eradius
+./rebar get-deps
+./rebar compile
+```
 
+## Starting eradius from cli
+
+```
+erl -pa $PWD/ebin -pa $PWD/deps/*/ebin -pa $PWD/priv
+application:ensure_all_started(eradius).
+```
+
+Note: To use `ensure_all_started` you will need Erlang R16B02 or better.
