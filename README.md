@@ -12,3 +12,6 @@ We should probably rename it to avoid confusion.
 We use [tetrapak](github.com/fjl/tetrapak) to build eradius.
 Tetrapak is required to build the dictionaries.
 
+### Contacting The Maintainer
+
+I tend to spend time as `Sargun` on Freenode in #erlang, but the best way to contact me is via e-mail. You can contact me at `sargun+eradius@sargun.me`. I may also be able to assist in adding features, if you request them via Github issues.
